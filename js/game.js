@@ -315,7 +315,7 @@ let NEXT_ID = 1;
 function newRun(mode) {
   const p = { x: 0, y: 0, r: 6, hp: 100, maxhp: 100, spd: 64, dir: { x: 1, y: 0 }, face: false, inv: 0, mech: false, anim: 0, moving: false, spdSkill: 1, drSkill: 0, leader: true };
   RN = {
-    mode, ng: S.ng > 0 && mode === 'normal', t: 0, kills: 0, elites: 0, level: 1, xp: 0, need: need(1), lvCount: 0, pendingLv: 0,
+    mode, ng: S.ng > 0 && mode === 'normal', t: 0, kills: 0, elites: 0, mbKills: 0, mbCount: 0, mbT: 150, mbBoss: null, mbOrder: ['enforcer', 'hive', 'ghost', 'colossus'].sort(() => Math.random() - 0.5), arena: null, hazards: [], lastHeal: -99, level: 1, xp: 0, need: need(1), lvCount: 0, pendingLv: 0,
     p, stats: { dmg: 1, cd: 1, magnet: 36, spd: 1, armor: 0, regen: 0 },
     enemies: [], proj: [], ebul: [], zones: [], fx: [], parts: [], picks: [], texts: [], timers: [],
     casters: [], comps: [], weapons: [], skillBonus: 0, mechParts: [], mechAnim: null, mechSweep: null,
@@ -360,7 +360,7 @@ function query(x, y, r, cb) {
   for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) { const c = GRID[gy * GW + gx]; if (c) for (const e of c) if (!e.dead && cb(e) === false) return; }
   if (RN.boss && !RN.boss.dead) { const b = RN.boss; if (Math.hypot(b.x - x, b.y - y) < r + b.r + 60) cb(b); }
 }
-function nearest(x, y, maxR = 400) { let best = null, bd = maxR * maxR; for (const e of RN.enemies) { if (e.dead) continue; const d = (e.x - x) ** 2 + (e.y - y) ** 2; if (d < bd) { bd = d; best = e; } } return best; }
+function nearest(x, y, maxR = 400) { let best = null, bd = maxR * maxR; for (const e of RN.enemies) { if (e.dead) continue; const d = ((e.x - x) ** 2 + (e.y - y) ** 2) * (e.prio || 1); if (d < bd) { bd = d; best = e; } } return best; } // prio < 1：自動瞄準優先（護盾節點）
 const onScreen = (e, m = 0) => Math.abs(e.x - RN.cam.x) < W / 2 + m && Math.abs(e.y - RN.cam.y) < H / 2 + m;
 function randomEnemy() { const a = RN.enemies.filter(e => !e.dead && onScreen(e)); return a.length ? pick(a) : null; }
 function aim(o, t) { if (!t) return { x: o.dir.x, y: o.dir.y }; const dx = t.x - o.x, dy = t.y - o.y, d = Math.hypot(dx, dy) || 1; return { x: dx / d, y: dy / d }; }
@@ -377,10 +377,13 @@ function lineHit(x0, y0, dx, dy, len, w, dmg, kb = 0) { query(x0 + dx * len / 2,
 function arcHit(x, y, r, ang, half, dmg, kb) { query(x, y, r, e => { const dx = e.x - x, dy = e.y - y, d = Math.hypot(dx, dy) || 1; if (d > r + e.r) return; let da = Math.atan2(dy, dx) - ang; da = Math.atan2(Math.sin(da), Math.cos(da)); if (Math.abs(da) < half || d < 10) hurt(e, dmg, dx / d * kb, dy / d * kb); }); }
 
 function hurt(e, dmg, kx = 0, ky = 0) {
-  if (e.dead) return; if (RN.freezeT > 0) dmg *= 1.5;
+  if (e.dead) return;
+  if (e.decoy) { kill(e); return; }
+  if (e.shielded) { if (Math.random() < 0.15) fx({ kind: 'ring', x: e.x, y: e.y, r: e.r + 10, col: '#73eff7', life: 0.15 }); return; }
+  if (RN.freezeT > 0) dmg *= 1.5; if (e.vuln) dmg *= 1.5;
   dmg = Math.max(1, Math.round(dmg * (0.9 + Math.random() * 0.2)));
   e.hp -= dmg; if (!e.boss || e.flash < -0.25) e.flash = e.boss ? 0.05 : 0.08;
-  if (!e.boss) { const m = e.elite ? 0.25 : e.type === 'brute' ? 0.5 : 1; e.kx += kx * m; e.ky += ky * m; }
+  if (!e.boss && !e.mb) { const m = e.elite ? 0.25 : e.type === 'brute' ? 0.5 : 1; e.kx += kx * m; e.ky += ky * m; }
   if (RN.texts.length < 70 && (dmg >= 8 || Math.random() < 0.5)) RN.texts.push({ x: e.x + rand(-4, 4), y: e.y - (e.h || 12) / 2 - 2, n: dmg, t: 0, col: dmg >= 100 ? '#ffcd4a' : dmg >= 40 ? '#ffa300' : '#f4f4f4' });
   sfx('hit');
   if (e.hp <= 0) kill(e);
@@ -388,21 +391,24 @@ function hurt(e, dmg, kx = 0, ky = 0) {
 function kill(e) {
   e.dead = true;
   if (e.boss) { bossDown(e); return; }
+  if (e.decoy) { fx({ kind: 'shards', x: e.x, y: e.y, life: 0.35 }); burst(e.x, e.y, ['#ff77a8', '#73eff7', '#f4f4f4'], 10, 70, 0.4); return; }
+  if (e.mb === 'node' && e.owner) e.owner.nodes--;
+  if (e.mb && e.mb !== 'node') { mbDown(e); return; }
   RN.kills++;
   burst(e.x, e.y, ['#73eff7', '#f4f4f4', '#ff77a8', '#41a6f6', '#a46be0'], e.elite ? 30 : 7, e.elite ? 90 : 55, 0.55, e.elite ? 2 : 1);
   fx({ kind: 'pop', x: e.x, y: e.y, r: e.r + 3, life: 0.22 });
   sfx('kill');
   if (RN.mode === 'boss') return;
   RN.picks.push({ kind: 'xp', x: e.x, y: e.y, val: e.xp, t: 0 });
-  if (Math.random() < 0.012) RN.picks.push({ kind: 'heal', x: e.x + 4, y: e.y, t: 0 });
+  if (Math.random() < 0.012 && RN.t - RN.lastHeal > 25) { RN.lastHeal = RN.t; RN.picks.push({ kind: 'heal', x: e.x + 4, y: e.y, t: 0 }); } // 補血稀有且有冷卻
   if (Math.random() < 0.0035) RN.picks.push({ kind: 'magnet', x: e.x - 4, y: e.y, t: 0 });
-  if (e.elite) { RN.elites++; RN.picks.push({ kind: 'crate', x: e.x, y: e.y, t: 0 }); }
+  if (e.elite) { RN.elites++; RN.picks.push({ kind: 'crate', x: e.x, y: e.y, t: 0 }); if (Math.random() < 0.5) RN.picks.push({ kind: 'heal', x: e.x + 8, y: e.y, t: 0 }); }
 }
 function hurtPlayer(d) {
   const p = RN.p; if (p.inv > 0 || RN.over) return;
   if (RN.mechAnim) return;
   if (p.dodge && Math.random() < p.dodge) { p.inv = 0.3; fx({ kind: 'ring', x: p.x, y: p.y, r: 12, col: '#c9b6ff', life: 0.25 }); burst(p.x, p.y, ['#c9b6ff', '#f4f4f4', '#73eff7'], 6, 60, 0.35); return; } // 鏡花水月：閃避
-  const dr = Math.min(0.75, RN.stats.armor + p.drSkill + (p.mech ? 0.3 : 0));
+  const dr = Math.min(0.6, RN.stats.armor + p.drSkill + (p.mech ? 0.25 : 0));
   p.hp -= d * (1 - dr); p.inv = 0.45; RN.shake = Math.max(RN.shake, 3); sfx('hurt');
   burst(p.x, p.y, ['#73eff7', '#c9fff6'], 6, 50, 0.4);
   if (RN.mode === 'boss') p.hp = Math.max(p.hp, p.maxhp * 0.5);
@@ -445,7 +451,7 @@ const SK = {
   },
   jinghua(c, L, dt, M) { // 鏡花水月：閃身穿梭、鏡像、鏡界
     const o = c.ent, st = c.st;
-    if (o.leader) o.dodge = Math.min(0.6, 0.25 + 0.03 * L);
+    if (o.leader) o.dodge = Math.min(0.45, 0.22 + 0.025 * L);
     if (st.dash) {
       const d = st.dash; d.t += dt; const k = Math.min(1, d.t / d.dur);
       o.x = d.x0 + (d.x1 - d.x0) * k; o.y = d.y0 + (d.y1 - d.y0) * k; if (o.leader) o.inv = Math.max(o.inv, 0.35);
@@ -577,8 +583,8 @@ const STAT_OPTS = [
   { k: 'dmg', t: '傷害 +12%', d: '所有功法與武器傷害提升。', ok: () => true, f: () => RN.stats.dmg += 0.12 },
   { k: 'cd', t: '冷卻 -8%', d: '功法與武器更頻繁發動。', ok: () => RN.stats.cd > 0.55, f: () => RN.stats.cd *= 0.92 },
   { k: 'mag', t: '拾取範圍 +35%', d: '經驗結晶從更遠處飛來。', ok: () => RN.stats.magnet < 140, f: () => RN.stats.magnet *= 1.35 },
-  { k: 'regen', t: '每秒回復 +0.6', d: '分身緩慢自我修復。', ok: () => RN.stats.regen < 4, f: () => RN.stats.regen += 0.6 },
-  { k: 'armor', t: '減傷 +6%', d: '受到的傷害降低。', ok: () => RN.stats.armor < 0.4, f: () => RN.stats.armor += 0.06 },
+  { k: 'regen', t: '每秒回復 +0.5', d: '分身緩慢自我修復（上限每秒 2）。', ok: () => RN.stats.regen < 1.9, f: () => RN.stats.regen = Math.min(2, RN.stats.regen + 0.5) },
+  { k: 'armor', t: '減傷 +5%', d: '受到的傷害降低（總減傷上限 60%）。', ok: () => RN.stats.armor < 0.3, f: () => RN.stats.armor += 0.05 },
 ];
 function makeOptions() {
   const pool = [];
@@ -597,7 +603,7 @@ function optHTML(o, i) {
   if (o.type === 'wnew') { const W2 = WEAPONS[o.id]; t = `新武器：${W2.name}`; d = W2.desc + (RN.school ? `<br><span style="color:var(--dim)">Lv3 超凡：${W2[RN.school].name}</span>` : ''); }
   if (o.type === 'skill') { const c = RN.casters[0]; t = `功法精進：${SKILLS[c.id].name}`; d = `本次出擊中功法等級 +1（目前 Lv${skillLv(c)}）。${RN.comps.length ? '所有分身同時精進。' : ''}`; }
   if (o.type === 'stat') { t = o.s.t; d = o.s.d; }
-  if (o.type === 'heal') { t = '系統補給'; d = '回復全部生命。'; }
+  if (o.type === 'heal') { t = '系統補給'; d = '回復 40% 生命。'; }
   const icon = o.type === 'wup' ? `<img src="${ICONS[WEAPONS[o.w.id].icon]}" style="width:36px;image-rendering:pixelated">` : o.type === 'wnew' ? `<img src="${ICONS[WEAPONS[o.id].icon]}" style="width:36px;image-rendering:pixelated">` : '';
   return `<button class="opt ${cls}" data-act="opt:${i}">${icon}<div class="ot">${t}</div><div class="od">${d}</div><div class="key">${TOUCH ? '點擊選擇' : '按 ' + (i + 1)}</div></button>`;
 }
@@ -621,7 +627,7 @@ function chooseOpt(i) {
   if (o.type === 'wnew') giveWeapon(o.id);
   if (o.type === 'skill') { RN.skillBonus++; toast('功法精進！'); }
   if (o.type === 'stat') o.s.f();
-  if (o.type === 'heal') RN.p.hp = RN.p.maxhp;
+  if (o.type === 'heal') RN.p.hp = Math.min(RN.p.maxhp, RN.p.hp + RN.p.maxhp * 0.4);
   RN.hudDirty = true; RN.opts = null; RN.lvUI = false; const el = $('#lvlui'); if (el) el.remove();
   RN.pendingLv--; if (RN.pendingLv > 0) openLevelUp(); else { RN.paused = false; if (RN.mechParts.length >= 6 && !RN.p.mech && !RN.mechAnim) startMechBuild(); }
 }
@@ -644,12 +650,13 @@ function finishMech() {
 function spawnEnemy(type, elite = false, ang) {
   const d = ENEMY[type], p = RN.p, a = ang === undefined ? Math.random() * TAU : ang, t = RN.t;
   const hpMul = (1 + t / 70 + (t / 300) ** 2) * (RN.ng ? 1.8 : 1) * (elite ? 14 : 1);
-  const e = { id: NEXT_ID++, type, spr: d.spr, x: p.x + Math.cos(a) * 290, y: p.y + Math.sin(a) * 190, r: d.r * (elite ? 1.4 : 1), hp: d.hp * hpMul, spd: d.spd * (1 + Math.min(0.6, t / 500)) * (elite ? 1.3 : 1) * rand(0.9, 1.1), dmg: d.dmg * (1 + t / 260) * (elite ? 1.6 : 1), xp: d.xp * (elite ? 12 : 1), elite, flash: 0, anim: Math.random() * 5, kx: 0, ky: 0, slowT: 0, cd: rand(1, 3), ranged: d.ranged, fly: d.fly, h: IMG[d.spr].r[0].height };
+  const e = { id: NEXT_ID++, type, spr: d.spr, x: p.x + Math.cos(a) * 290, y: p.y + Math.sin(a) * 190, r: d.r * (elite ? 1.4 : 1), hp: d.hp * hpMul, spd: d.spd * (1 + Math.min(0.6, t / 500)) * (elite ? 1.3 : 1) * rand(0.9, 1.1), dmg: d.dmg * dmgScale() * (elite ? 1.6 : 1), xp: d.xp * (elite ? 12 : 1), elite, flash: 0, anim: Math.random() * 5, kx: 0, ky: 0, slowT: 0, cd: rand(1, 3), ranged: d.ranged, fly: d.fly, h: IMG[d.spr].r[0].height };
   e.maxhp = e.hp; RN.enemies.push(e); return e;
 }
 function spawnTick(dt) {
   if (RN.mode === 'boss') { RN.spawnAcc += dt * 2.5; while (RN.spawnAcc >= 1 && RN.enemies.length < 120) { RN.spawnAcc--; spawnEnemy(pick(['walker', 'drone', 'runner'])); } return; }
-  const t = RN.t, rate = (1.1 + t / 20) * (RN.ng ? 2 : 1);
+  if (!RN.mbBoss) { RN.mbT -= dt; if (RN.mbT <= 0) spawnMiniBoss(RN.mbOrder[RN.mbCount % RN.mbOrder.length]); }
+  const t = RN.t, rate = (1.1 + t / 20) * (RN.ng ? 2 : 1) * (RN.mbBoss ? 0.6 : 1);
   if (RN.enemies.length < E_CAP) { RN.spawnAcc += rate * dt; while (RN.spawnAcc >= 1) { RN.spawnAcc--;
     const pool = [['walker', 10], ['runner', t > 25 ? 5 : 0], ['drone', t > 50 ? 4 : 0], ['hacker', t > 80 ? 2.2 : 0], ['brute', t > 120 ? 1 + t / 150 : 0]];
     let tot = pool.reduce((a, b) => a + b[1], 0), r = Math.random() * tot, ty = 'walker'; for (const [k, w] of pool) { r -= w; if (r < 0) { ty = k; break; } } spawnEnemy(ty); } }
@@ -694,7 +701,7 @@ function bossDown(b) {
 // ---------- 結算 ----------
 function endRun(why) {
   if (RN.over) return; RN.over = true; RN.paused = false; const p = RN.p;
-  const pts = Math.floor((RN.kills * 1.2 + RN.t + RN.elites * 25 + RN.level * 8 + (p.mech ? 60 : 0)) * (RN.ng ? 1.5 : 1));
+  const pts = Math.floor((RN.kills * 1.2 + RN.t + RN.elites * 25 + RN.mbKills * 80 + RN.level * 8 + (p.mech ? 60 : 0)) * (RN.ng ? 1.5 : 1));
   RN.result = { pts, why }; S.points += pts; S.kills += RN.kills; S.best = Math.max(S.best, RN.t); save();
   if (why === 'down') { banner('分身消散', '#73eff7'); sfx('down'); burst(p.x, p.y, ['#73eff7', '#c9fff6', '#41a6f6'], 50, 80, 1.2, 2); RN.dead = true; }
   const lu = $('#lvlui'); if (lu) lu.remove(); const pu = $('#pauseui'); if (pu) pu.remove();
@@ -705,6 +712,7 @@ function endRun(why) {
       <div class="stat"><span>存活時間</span><span>${fmtT(RN.t)}</span></div>
       <div class="stat"><span>擊破數</span><span>${RN.kills}</span></div>
       <div class="stat"><span>精英擊破</span><span>${RN.elites}</span></div>
+      <div class="stat"><span>頭目擊破</span><span>${RN.mbKills}</span></div>
       <div class="stat"><span>分身等級</span><span>Lv ${RN.level}</span></div>
       ${p.mech ? '<div class="stat" style="color:var(--gold)"><span>手搓機甲</span><span>完成</span></div>' : ''}
       <div class="stat" style="color:var(--gold);font-size:22px"><span>獲得系統點數</span><span>+${pts}</span></div>
@@ -734,7 +742,7 @@ const RunScene = {
         : `<div class="xpbar"><div class="xpfill" id="xpfill"></div><div class="xplv" id="xplv"></div></div><div class="htimer" id="htimer"></div>`}
       <div class="hpwrap" ${RN.mode === 'boss' ? 'style="top:60px"' : ''}>${RN.mode === 'boss' ? '本體' : '分身'}<div class="hpbar"><div class="hpfill" id="hpfill"></div></div><span id="hptxt"></span></div>
       <div class="hinfo" id="hinfo" ${RN.mode === 'boss' ? 'style="top:84px"' : ''}></div>
-      ${RN.mode === 'boss' ? '' : '<div class="mechbar" id="mechbar"></div><div class="wname" id="wname"></div><div class="slots" id="slots"></div><button class="btn pausebtn" data-act="pause">II 暫停</button>'}
+      ${RN.mode === 'boss' ? '' : '<div id="mbwrap" style="display:none;position:absolute;left:230px;right:230px;top:62px;text-align:center"><div id="mbname" style="font-size:15px;color:var(--red);text-shadow:2px 2px 0 #14101e"></div><div style="height:12px;border:3px solid #f4f4f4;background:#14101e;box-shadow:0 0 0 2px #14101e"><div id="mbfill" style="height:100%;width:100%;background:linear-gradient(#ff77a8,#ff3860)"></div></div></div><div class="mechbar" id="mechbar"></div><div class="wname" id="wname"></div><div class="slots" id="slots"></div><button class="btn pausebtn" data-act="pause">II 暫停</button>'}
     </div>`;
     this.el = { xp: $('#xpfill'), lv: $('#xplv'), tm: $('#htimer'), hp: $('#hpfill'), hpt: $('#hptxt'), info: $('#hinfo'), mech: $('#mechbar'), slots: $('#slots'), wn: $('#wname'), boss: $('#bossfill') };
     RN.hudDirty = true;
@@ -777,6 +785,7 @@ function updateRun(rdt) {
   if (!RN.dead && !(RN.mode === 'boss' && RN.over)) {
     const mv = moveInput(); const spd = p.spd * RN.stats.spd * p.spdSkill * (p.mech ? 0.95 : 1) * (RN.mode === 'boss' ? 1.2 : 1);
     p.x += mv.x * spd * dt; p.y += mv.y * spd * dt; p.moving = !!(mv.x || mv.y);
+    if (RN.arena) { const A = RN.arena, ax = p.x - A.x, ay = p.y - A.y, ad = Math.hypot(ax, ay); if (ad > A.r - 6) { p.x = A.x + ax / ad * (A.r - 6); p.y = A.y + ay / ad * (A.r - 6); if (RN.t - (A.zap || 0) > 0.6) { A.zap = RN.t; hurtPlayer(6 * dmgScale()); fx({ kind: 'bolt', pts: [[p.x, p.y], [p.x + rand(-10, 10), p.y + rand(-10, 10)], [A.x + ax / ad * A.r, A.y + ay / ad * A.r]], life: 0.15 }); } } }
     if (p.moving) { p.dir = { x: mv.x, y: mv.y }; if (Math.abs(mv.x) > 0.1) p.face = mv.x < 0; p.anim += dt; }
     p.inv -= dt; p.hp = Math.min(p.maxhp, p.hp + RN.stats.regen * dt);
     RN.comps.forEach((c, i) => {
@@ -849,6 +858,7 @@ function updateRun(rdt) {
     if (e.boss) { bossUpdate(e, dt); continue; }
     e.x += e.kx * dt; e.y += e.ky * dt; const kd = Math.min(1, dt * 9); e.kx -= e.kx * kd; e.ky -= e.ky * kd;
     if (frozen || RN.over) continue;
+    if (e.mb) { mbUpdate(e, dt); continue; }
     e.anim += dt; e.slowT -= dt;
     const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy) || 1; const sp = e.spd * (e.slowT > 0 ? 0.45 : 1);
     if (e.ranged && d < 110) { e.x -= dy / d * sp * 0.6 * dt; e.y += dx / d * sp * 0.6 * dt; if (d < 80) { e.x -= dx / d * sp * dt; e.y -= dy / d * sp * dt; } }
@@ -864,6 +874,9 @@ function updateRun(rdt) {
     }
   }
   RN.enemies = RN.enemies.filter(e => !e.dead);
+  // 頭目地面危險區
+  for (const z of RN.hazards) { z.life -= dt; z.tt = (z.tt || 0) - dt; if (!RN.dead && z.tt <= 0 && Math.hypot(p.x - z.x, p.y - z.y) < z.r + p.r) { z.tt = 0.5; hurtPlayer(z.dmg); } }
+  RN.hazards = RN.hazards.filter(z => z.life > 0);
   // 敵方子彈
   for (const b of RN.ebul) { if (frozen && RN.mode !== 'boss') continue; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt; if (!RN.dead && Math.hypot(b.x - p.x, b.y - p.y) < b.r + p.r) { b.life = 0; hurtPlayer(b.dmg); } }
   RN.ebul = RN.ebul.filter(b => b.life > 0);
@@ -874,7 +887,7 @@ function updateRun(rdt) {
     if (k.pull || d < mag) { k.pull = true; const sp = 160 + k.t * 40; k.x += dx / d * sp * dt; k.y += dy / d * sp * dt; }
     if (d < p.r + 5) { k.got = true;
       if (k.kind === 'xp') { gainXp(k.val); sfx('xp'); }
-      if (k.kind === 'heal') { p.hp = Math.min(p.maxhp, p.hp + 30); toast('能量罐：回復 30'); sfx('pick'); }
+      if (k.kind === 'heal') { const v = Math.round(k.big ? p.maxhp * 0.4 : 25 + p.maxhp * 0.1); p.hp = Math.min(p.maxhp, p.hp + v); toast(`能量罐：回復 ${v}`); sfx('pick'); }
       if (k.kind === 'magnet') { RN.picks.forEach(q => { if (q.kind === 'xp') q.pull = true; }); toast('系統磁鐵：吸取全部經驗'); sfx('pick'); }
       if (k.kind === 'crate') { const un = Object.keys(WEAPONS).filter(id => !RN.weapons.some(w => w.id === id)); const up = RN.weapons.filter(w => w.lvl < 5).map(w => w.id);
         const id = (RN.weapons.length < 5 && un.length && (Math.random() < 0.6 || !up.length)) ? pick(un) : up.length ? pick(up) : pick(Object.keys(WEAPONS)); giveWeapon(id); burst(k.x, k.y, ['#ffcd4a', '#f4f4f4'], 16, 70, 0.6); }
@@ -899,6 +912,8 @@ function updateHud(dt = 0) {
   const p = RN.p;
   el.hp.style.width = (p.hp / p.maxhp * 100) + '%'; el.hp.style.background = p.hp / p.maxhp < 0.3 ? '#ff4f6d' : p.mech ? '#ffcd4a' : '#a7f070';
   el.hpt.textContent = `${Math.ceil(p.hp)}/${p.maxhp}`;
+  const mbw = $('#mbwrap');
+  if (mbw) { const b = RN.mbBoss; mbw.style.display = b && !b.dead ? 'block' : 'none'; if (b && !b.dead) { $('#mbfill').style.width = Math.max(0, b.hp / b.maxhp * 100) + '%'; $('#mbname').textContent = MINIBOSS[b.mb].name + (b.shielded ? '（護盾中）' : b.vuln ? '（當機中！）' : ''); } }
   if (RN.mode === 'boss') { el.boss.style.width = Math.max(0, RN.boss.hp / RN.boss.maxhp * 100) + '%'; el.info.textContent = `習得功法 ${RN.casters.length} 本，全數發動中`; return; }
   el.xp.style.width = (RN.xp / RN.need * 100) + '%'; el.lv.textContent = 'Lv ' + RN.level; el.tm.textContent = fmtT(RN.t);
   el.info.innerHTML = `擊破 ${RN.kills}　精英 ${RN.elites}${RN.ng ? '　<span style="color:var(--gold)">無限流 ×1.5</span>' : ''}`;
@@ -951,6 +966,9 @@ function drawRun() {
     if (z.kind === 'rune') { ctx.globalAlpha = Math.min(1, a * 2) * 0.85; pring(ctx, x, y, z.r, '#c06cf0', 1); pring(ctx, x, y, z.r - 5, '#a46be0', 1); for (let i = 0; i < 6; i++) { const an = i / 6 * TAU + z.t; const an2 = an + TAU / 3; pline(ctx, x + Math.cos(an) * (z.r - 5), y + Math.sin(an) * (z.r - 5), x + Math.cos(an2) * (z.r - 5), y + Math.sin(an2) * (z.r - 5), '#c06cf0'); } ctx.globalAlpha = 1; }
     if (z.kind === 'tornado') { ctx.globalAlpha = Math.min(1, a * 2); for (let i = 0; i < 18; i++) { const an = i * 0.7 + z.t * 9, rr = (i / 18) * z.r; R(ctx, x + Math.cos(an) * rr, y + Math.sin(an) * rr * 0.6 - i * 0.6, 2, 2, i % 3 ? '#c9fff6' : '#94b0c2'); } ctx.globalAlpha = 1; }
   }
+  for (const z of RN.hazards) { const x = z.x - cx, y = z.y - cy; ctx.globalAlpha = Math.min(1, z.life) * 0.8; pring(ctx, x, y, z.r, '#ff77a8'); for (let i = 0; i < 10; i++) { const a = hash(i, Math.floor(RN.t * 12), z.id) * TAU, r = hash(i, Math.floor(RN.t * 12), 9) * z.r; R(ctx, x + Math.cos(a) * r, y + Math.sin(a) * r, 3, 2, i % 2 ? '#ff77a8' : '#73eff7'); } ctx.globalAlpha = 1; }
+  if (RN.arena) { const A = RN.arena, x = A.x - cx, y = A.y - cy; ctx.globalAlpha = 0.5 + 0.3 * Math.sin(RN.t * 9); pring(ctx, x, y, A.r, '#ffec27'); pring(ctx, x, y, A.r + 2, '#73eff7'); ctx.globalAlpha = 1;
+    for (let i = 0; i < 24; i++) { const a = i / 24 * TAU, px = x + Math.cos(a) * A.r, py = y + Math.sin(a) * A.r; R(ctx, px - 1, py - 8, 3, 9, '#14101e'); R(ctx, px, py - 7, 1, 7, '#566c86'); if ((i + Math.floor(RN.t * 6)) % 4 === 0) R(ctx, px - 1, py - 9, 3, 2, '#ffec27'); } }
   // 實體（依 y 排序）
   const ents = [];
   for (const e of RN.enemies) if (!e.dead && Math.abs(e.x - cx - W / 2) < W / 2 + 30 && Math.abs(e.y - cy - H / 2) < H / 2 + 40) ents.push(e);
@@ -969,6 +987,7 @@ function drawRun() {
       drawSet(set, fr, x, y + 8 - bob, e.face, false);
       continue;
     }
+    if (e.mb) { drawMB(e, x, y); continue; }
     R(ctx, x - e.r, y + 6, e.r * 2, 2, 'rgba(0,0,0,.35)');
     const set = IMG[e.spr], fr = Math.floor(e.anim * 5) % 2, flip = p.x < e.x;
     if (e.elite) { const g = set.gold[fr]; ctx.drawImage(g, Math.round(x - g.width / 2), Math.round(y + 9 - g.height)); }
@@ -1006,6 +1025,87 @@ function drawRun() {
   if (RN.p.hp / RN.p.maxhp < 0.3 && !RN.over && RN.mode !== 'boss') { ctx.globalAlpha = 0.15 + 0.1 * Math.sin(RN.t * 8); R(ctx, 0, 0, W, 3, '#ff4f6d'); R(ctx, 0, H - 3, W, 3, '#ff4f6d'); R(ctx, 0, 0, 3, H, '#ff4f6d'); R(ctx, W - 3, 0, 3, H, '#ff4f6d'); ctx.globalAlpha = 1; }
   // 虛擬搖桿
   if (joy.on) { ctx.globalAlpha = 0.4; pring(ctx, joy.x0, joy.y0, 24, '#f4f4f4', 1); const dx = joy.x - joy.x0, dy = joy.y - joy.y0, d = Math.hypot(dx, dy), m = Math.min(d, 24) / (d || 1); pcircle(ctx, joy.x0 + dx * m, joy.y0 + dy * m, 8, '#73eff7'); ctx.globalAlpha = 1; }
+}
+function drawMB(e, x, y) {
+  if (e.mb === 'node') { const o = e.owner; if (o && !o.dead) { ctx.globalAlpha = 0.4; pline(ctx, x, y, o.x - RN.cam.x + W / 2, o.y - RN.cam.y + H / 2, '#73eff7'); ctx.globalAlpha = 1; } drawGlow(x, y, 10, 'rgba(65,166,246,.7)'); pcircle(ctx, x, y, 5, '#14101e'); pcircle(ctx, x, y, 4, e.flash > 0 ? '#ffffff' : '#41a6f6'); R(ctx, x - 1, y - 1, 2, 2, '#c9fff6'); return; }
+  const set = IMG['mb_' + e.mb], fr = Math.floor(e.anim * 4) % 2, flip = RN.p.x < e.x, img = set.r[0], foot = Math.floor(img.height / 2), fly = e.mb === 'hive';
+  if (!e.decoy) R(ctx, x - e.r, y + foot - (fly ? -6 : 1), e.r * 2, 3, 'rgba(0,0,0,.45)'); // 影子：數據幽靈的本體才有
+  if (e.mb === 'enforcer' && e.state === 'aim' && Math.floor(e.st * 16) % 2) pline(ctx, x, y, x + e.cdx * 380, y + e.cdy * 380, '#ff3860', 1);
+  if (e.mb === 'enforcer' && e.state === 'charge') drawGlow(x, y, 26, 'rgba(255,56,96,.5)');
+  const gx = e.mb === 'ghost' && Math.random() < 0.15 ? (Math.random() < 0.5 ? -2 : 2) : 0;
+  if (e.mb === 'ghost') ctx.globalAlpha = 0.92;
+  drawSet(set, fr, x + gx, y + foot, flip, false); if (e.flash > 0) drawSet(set, fr, x + gx, y + foot, flip, true);
+  ctx.globalAlpha = 1;
+  if (e.mb === 'hive' && e.shielded) { ctx.globalAlpha = 0.18 + 0.08 * Math.sin(RN.t * 5); pcircle(ctx, x, y, e.r + 12, '#41a6f6'); ctx.globalAlpha = 0.85; pring(ctx, x, y, e.r + 12, '#73eff7'); ctx.globalAlpha = 1; }
+  if (e.vuln) for (let i = 0; i < 3; i++) { const a = RN.t * 5 + i * TAU / 3; R(ctx, x + Math.cos(a) * 9, y - foot - 4 + Math.sin(a) * 3, 2, 2, '#ffec27'); }
+}
+function dmgScale() { const t = RN.t; return (1 + t / 260 + Math.max(0, (t - 180) / 300) ** 2) * (RN.ng ? 1.3 : 1); } // 前 3 分鐘與舊版相同，之後二次方成長
+function spawnMiniBoss(kind) {
+  const p = RN.p, d = MINIBOSS[kind], sc = (1 + RN.mbCount * 0.7) * (1 + RN.t / 300) * (RN.ng ? 1.8 : 1), a = Math.random() * TAU;
+  const img = IMG['mb_' + kind].r[0];
+  const e = { id: NEXT_ID++, type: 'mb', mb: kind, x: p.x + Math.cos(a) * 190, y: p.y + Math.sin(a) * 110, r: d.r, h: img.height, hp: d.hp * sc, dmg: d.dmg * dmgScale(), spd: d.spd, xp: 0, flash: 0, anim: 0, kx: 0, ky: 0, slowT: 0, state: 'walk', st: 2, cd: 2, t: 0 };
+  e.maxhp = e.hp; RN.enemies.push(e); RN.mbBoss = e; RN.mbCount++;
+  if (kind === 'hive') deployNodes(e);
+  if (kind === 'colossus') { RN.arena = { x: p.x, y: p.y, r: 150 }; e.x = p.x + Math.cos(a) * 100; e.y = p.y + Math.sin(a) * 100; e.mort = 2; e.sum = 4; }
+  if (kind === 'ghost') { e.tp = 1.5; e.fire = 1.2; }
+  banner('頭目來襲', '#ff3860'); toast(`${d.name}：${d.hint}`); sfx('roar'); RN.shake = 5; RN.hudDirty = true;
+}
+function deployNodes(h) {
+  h.nodes = 3;
+  for (let i = 0; i < 3; i++) RN.enemies.push({ id: NEXT_ID++, type: 'mb', mb: 'node', owner: h, ang: i * TAU / 3, x: h.x, y: h.y, r: 6, h: 10, hp: 60 * (1 + RN.mbCount * 0.4) * (1 + RN.t / 300), maxhp: 1, dmg: 0, spd: 0, xp: 3, prio: 0.35, flash: 0, anim: 0, kx: 0, ky: 0, slowT: 0 });
+}
+function mbUpdate(e, dt) {
+  const p = RN.p; e.anim += dt; e.t += dt; e.slowT -= dt;
+  const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy) || 1, sp = e.spd * (e.slowT > 0 ? 0.6 : 1);
+  const touch = m => { if (!RN.dead && d < e.r + p.r) hurtPlayer(e.dmg * m); };
+  const bullets = (n, spread, speed) => { const a0 = Math.atan2(dy, dx); for (let i = 0; i < n; i++) { const a = a0 + (i - (n - 1) / 2) * spread; RN.ebul.push({ x: e.x, y: e.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, r: 3, dmg: e.dmg * 0.7, life: 5 }); } };
+  switch (e.mb) {
+    case 'node': { const o = e.owner; if (!o || o.dead) { e.dead = true; return; } e.ang += dt * 1.6; e.x = o.x + Math.cos(e.ang) * 34; e.y = o.y + Math.sin(e.ang) * 26; return; }
+    case 'enforcer':
+      if (e.state === 'walk') { e.x += dx / d * sp * dt; e.y += dy / d * sp * dt; touch(1); e.st -= dt; if (e.st <= 0) { e.state = 'aim'; e.st = 0.9; } }
+      else if (e.state === 'aim') { e.st -= dt; if (e.st > 0.35) { e.cdx = dx / d; e.cdy = dy / d; } if (e.st <= 0) { e.state = 'charge'; e.st = 0.75; sfx('roar'); } }
+      else if (e.state === 'charge') { e.x += e.cdx * 440 * dt; e.y += e.cdy * 440 * dt; e.st -= dt; touch(1.8); RN.parts.push({ x: e.x, y: e.y + 6, vx: 0, vy: 0, life: 0.3, max: 0.3, col: '#ff3860', s: 2 });
+        if (e.st <= 0) { e.state = 'stun'; e.st = 1.6; e.vuln = true; fx({ kind: 'shock', x: e.x, y: e.y, r: 56, life: 0.4 }); RN.shake = 5; sfx('boom'); if (!RN.dead && Math.hypot(p.x - e.x, p.y - e.y) < 56) hurtPlayer(e.dmg); } }
+      else if (e.state === 'stun') { e.st -= dt; if (e.st <= 0) { e.vuln = false; e.state = 'walk'; e.st = 2.2; } }
+      break;
+    case 'hive': {
+      const want = 75, tx = -dy / d, ty = dx / d; e.x += (dx / d * (d - want) * 1.5 + tx * sp) * dt; e.y += (dy / d * (d - want) * 1.5 + ty * sp) * dt;
+      e.shielded = e.nodes > 0;
+      if (!e.shielded) { e.vulnT = (e.vulnT === undefined ? 9 : e.vulnT) - dt; if (e.vulnT <= 0) { e.vulnT = undefined; deployNodes(e); toast('蜂巢母艦重新展開護盾'); } }
+      e.cd -= dt; if (e.cd <= 0) { e.cd = 3.4; for (let i = 0; i < 4; i++) { const m = spawnEnemy('drone', false); m.x = e.x + rand(-16, 16); m.y = e.y + rand(-8, 12); } bullets(3, 0.25, 85); sfx('shoot'); }
+      break; }
+    case 'ghost':
+      if (e.decoy) { e.life -= dt; if (e.life <= 0) { e.dead = true; return; } }
+      else { e.tp -= dt; if (e.tp <= 0) { e.tp = 4.6;
+        RN.hazards.push({ id: NEXT_ID++, x: e.x, y: e.y, r: 28, life: 4.5, dmg: e.dmg * 0.6 });
+        for (const o of RN.enemies) if (o.decoy && !o.dead) o.dead = true;
+        const base = Math.random() * TAU, real = Math.floor(Math.random() * 4);
+        for (let i = 0; i < 4; i++) { const a = base + i * TAU / 4, x = p.x + Math.cos(a) * 115, y = p.y + Math.sin(a) * 85;
+          if (i === real) { fx({ kind: 'shards', x: e.x, y: e.y, life: 0.35 }); e.x = x; e.y = y; }
+          else RN.enemies.push({ id: NEXT_ID++, type: 'mb', mb: 'ghost', decoy: true, life: 4.5, x, y, r: 9, h: e.h, hp: 1, maxhp: 1, dmg: e.dmg, spd: e.spd, xp: 0, flash: 0, anim: Math.random(), kx: 0, ky: 0, slowT: 0, fire: e.fire, t: 0 }); }
+        sfx('zap'); } }
+      e.x += dx / d * sp * dt; e.y += dy / d * sp * dt; touch(1);
+      e.fire -= dt; if (e.fire <= 0) { e.fire = 1.9; bullets(5, 0.22, 70); }
+      break;
+    case 'colossus':
+      e.x += dx / d * sp * dt; e.y += dy / d * sp * dt; touch(1.5);
+      e.mort -= dt; if (e.mort <= 0) { e.mort = 2.4; const n = 3 + Math.min(3, RN.mbCount);
+        for (let i = 0; i < n; i++) { const x = p.x + (i ? rand(-60, 60) : 0), y = p.y + (i ? rand(-45, 45) : 0), r = 24, dm = e.dmg * 1.3;
+          fx({ kind: 'warn', x, y, r, life: 1.1 }); later(1.1, () => { fx({ kind: 'boom', x, y, r, life: 0.35 }); burst(x, y, ['#ffa300', '#ffec27', '#566c86'], 10, 70, 0.4); sfx('boom'); RN.shake = Math.max(RN.shake, 3); if (!RN.dead && Math.hypot(RN.p.x - x, RN.p.y - y) < r + RN.p.r) hurtPlayer(dm); }); } }
+      e.sum -= dt; if (e.sum <= 0 && RN.arena) { e.sum = 6; for (let i = 0; i < 5; i++) { const m = spawnEnemy('walker', false), a = Math.random() * TAU; m.x = RN.arena.x + Math.cos(a) * (RN.arena.r - 12); m.y = RN.arena.y + Math.sin(a) * (RN.arena.r - 12); } }
+      break;
+  }
+  if (!e.decoy && d > 380) { const a = Math.random() * TAU; e.x = p.x + Math.cos(a) * 190; e.y = p.y + Math.sin(a) * 110; }
+}
+function mbDown(e) {
+  RN.kills++; RN.mbKills++; RN.mbBoss = null; RN.mbT = 120; RN.hudDirty = true;
+  if (e.mb === 'colossus') RN.arena = null;
+  for (const o of RN.enemies) if ((o.decoy || o.owner === e) && !o.dead) o.dead = true;
+  banner('頭目擊破', '#ffcd4a'); sfx('mech'); RN.shake = 7;
+  for (let i = 0; i < 6; i++) later(i * 0.1, () => { const x = e.x + rand(-20, 20), y = e.y + rand(-20, 20); fx({ kind: 'boom', x, y, r: 22, life: 0.4 }); burst(x, y, ['#73eff7', '#f4f4f4', '#ff77a8', '#ffcd4a'], 16, 110, 0.8, 2); });
+  RN.picks.push({ kind: 'crate', x: e.x, y: e.y, t: 0 }, { kind: 'heal', big: true, x: e.x + 12, y: e.y, t: 0 }, { kind: 'xp', x: e.x - 10, y: e.y, val: 40, t: 0 });
+  const missing = [0, 1, 2, 3, 4, 5].filter(i => !RN.mechParts.includes(i));
+  if (!RN.p.mech && !RN.mechAnim && missing.length) { const part = pick(missing); RN.mechParts.push(part); setTimeout(() => toast(`頭目掉落機甲部件「${MECH_PARTS[part]}」（${RN.mechParts.length}/6）`), 600); if (RN.mechParts.length >= 6 && !RN.paused) later(1.2, () => { if (!RN.p.mech && !RN.mechAnim) startMechBuild(); }); }
 }
 function drawMech(x, y, fr) {
   const p = RN.p, fl = Math.random();

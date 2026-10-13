@@ -77,6 +77,7 @@ function initSprites() {
   { const fr = [0, 1].map(st => outlined(buildMechFrame(st), 'rgba(115,239,247,.7)'));
     IMG.mech = { r: fr, l: fr.map(flipC), w: fr.map(f => silhouette(f, '#ffffff')), wl: fr.map(f => flipC(silhouette(f, '#ffffff'))), gold: fr }; }
   for (const id in WEAPONS) IMG[WEAPONS[id].icon] = buildSprite(SPR[WEAPONS[id].icon]);
+  IMG.mb_enforcer = bossSet(mbEnforcer); IMG.mb_hive = bossSet(mbHive); IMG.mb_ghost = bossSet(mbGhost); IMG.mb_colossus = bossSet(mbColossus);
 }
 // 機甲「怕死一號」34x36（程序繪製）
 function buildMechFrame(step) {
@@ -103,6 +104,53 @@ function buildMechFrame(step) {
   R(x, 16, 2, 2, 2, Au); R(x, 14, 1, 2, 1, Au); R(x, 12, 0, 2, 1, Au); R(x, 18, 1, 2, 1, Au); R(x, 20, 0, 2, 1, Au); R(x, 16, 3, 2, 1, '#ff3860');
   return c;
 }
+// ===== 頭目精靈（程序繪製）=====
+function mbEnforcer(st) {
+  const [c, x] = mkCanvas(28, 32); const K = '#14101e', A = '#333c57', a = '#566c86', V = '#ff3860', Y = '#ffcd4a';
+  const leg = (lx, dy) => { R(x, lx, 22, 5, 8 - dy, K); R(x, lx + 1, 22, 3, 7 - dy, A); R(x, lx - 1, 29 - dy, 7, 3, K); R(x, lx, 29 - dy, 5, 1, a); };
+  leg(9, st ? 1 : 0); leg(16, st ? 0 : 1);
+  R(x, 6, 10, 18, 13, K); R(x, 7, 11, 16, 11, A); R(x, 8, 12, 14, 3, a); R(x, 13, 15, 4, 3, Y);
+  R(x, 9, 1, 12, 10, K); R(x, 10, 2, 10, 8, A); R(x, 10, 2, 10, 1, a); R(x, 11, 5, 8, 2, V); R(x, 19, 0, 1, 2, K);
+  R(x, 3, 9, 6, 6, K); R(x, 4, 10, 4, 4, a); R(x, 21, 9, 6, 6, K); R(x, 22, 10, 4, 4, a); R(x, 5, 11, 1, 1, V); R(x, 24, 11, 1, 1, V);
+  R(x, 23, 15, 4, 8, K); R(x, 24, 15, 2, 7, A);
+  R(x, 0, 12, 9, 17, K); R(x, 1, 13, 7, 15, '#4b5a6b'); R(x, 1, 18, 7, 2, Y); R(x, 2, 14, 1, 12, '#94b0c2'); // 防爆盾
+  return c;
+}
+function mbHive(st) {
+  const [c, x] = mkCanvas(44, 26); const K = '#14101e';
+  R(x, 21, 1, 2, 5, K); R(x, 21, 0, 2, 1, '#ff3860');
+  R(x, 6, 6, 32, 14, K); R(x, 7, 7, 30, 12, '#566c86'); R(x, 7, 7, 30, 3, '#94b0c2'); R(x, 7, 15, 30, 4, '#333c57');
+  for (let i = 0; i < 4; i++) { R(x, 10 + i * 7, 16, 5, 3, K); R(x, 11 + i * 7, 17, 3, 1, st ? '#ffa300' : '#c86b1e'); }
+  R(x, 18, 9, 8, 5, K); R(x, 19, 10, 6, 3, '#a8203e'); R(x, 20 + st, 10, 3, 2, '#ff3860');
+  R(x, 0, 8, 7, 9, K); R(x, 1, 9, 5, 7, '#333c57'); R(x, 37, 8, 7, 9, K); R(x, 38, 9, 5, 7, '#333c57');
+  if (st) { R(x, 0, 6, 7, 1, '#c9fff6'); R(x, 37, 6, 7, 1, '#c9fff6'); } else { R(x, 2, 6, 3, 1, '#c9fff6'); R(x, 39, 6, 3, 1, '#c9fff6'); }
+  R(x, 14, 20, 2, 4, K); R(x, 28, 20, 2, 4, K);
+  return c;
+}
+function mbGhost(st) {
+  const [c, x] = mkCanvas(22, 30); const K = '#14101e', B = '#1a1426';
+  R(x, 5, 0, 12, 4, K); R(x, 3, 3, 16, 12, K); R(x, 4, 3, 14, 11, B); R(x, 7, 6, 8, 6, '#0b0812');
+  R(x, 8, 8, 2, 2, '#f4f4f4'); R(x, 12, 8, 2, 2, '#f4f4f4');
+  R(x, st ? 18 : 3, 4, 1, 10, '#ff77a8'); R(x, st ? 3 : 18, 4, 1, 10, '#73eff7');
+  R(x, 4, 14, 14, 10, K); R(x, 5, 14, 12, 9, B);
+  for (let y = 24; y < 30; y++) if ((y + st) % 2 === 0) R(x, 5 + (y - 24), y, 12 - (y - 24) * 2, 1, '#2a2438');
+  R(x, 7 + st, 16, 1, 1, '#73eff7'); R(x, 10, 18 + st, 2, 1, '#a7f070'); R(x, 13 - st, 17, 1, 1, '#ff77a8'); R(x, 8, 20, 3, 1, '#566c86');
+  return c;
+}
+function mbColossus(st) {
+  const [c, x] = mkCanvas(48, 46); const K = '#14101e', A = '#4a3b52', D = '#3b324f';
+  const leg = (lx, dy) => { R(x, lx, 32, 10, 12 - dy, K); R(x, lx + 1, 32, 8, 11 - dy, D); R(x, lx - 1, 43 - dy, 12, 3, K); R(x, lx, 43 - dy, 10, 1, '#566c86'); };
+  leg(11, st ? 1 : 0); leg(27, st ? 0 : 1);
+  R(x, 30, 1, 8, 11, K); R(x, 31, 2, 6, 9, '#333c57'); R(x, 31, 1, 6, 2, '#ff3860'); // 背部迫擊砲
+  R(x, 8, 10, 32, 23, K); R(x, 9, 11, 30, 21, A); R(x, 9, 11, 30, 4, '#5d4a68');
+  for (let i = 0; i < 5; i++) R(x, 11 + i * 6, 13, 1, 1, '#94b0c2');
+  R(x, 9, 27, 30, 2, '#ffcd4a'); for (let i = 0; i < 5; i++) R(x, 10 + i * 6, 27, 3, 2, K);
+  R(x, 19, 15, 10, 8, K); R(x, 20, 16, 8, 6, '#ffcd4a'); R(x, 22 + st, 17, 4, 3, '#fff3c0');
+  R(x, 1, 14, 8, 15, K); R(x, 2, 15, 6, 13, D); R(x, 39, 14, 8, 15, K); R(x, 40, 15, 6, 13, D);
+  R(x, 0, 27, 10, 7, K); R(x, 1, 28, 8, 5, '#566c86'); R(x, 38, 27, 10, 7, K); R(x, 39, 28, 8, 5, '#566c86');
+  return c;
+}
+function bossSet(fn) { const fr = [fn(0), fn(1)]; return { r: fr, l: fr.map(flipC), w: fr.map(f => silhouette(f, '#ffffff')), wl: fr.map(f => flipC(silhouette(f, '#ffffff'))), gold: fr }; }
 // 以腳底中心為錨點繪製
 function drawSet(set, frame, x, y, flip, white, scale = 1) {
   const arr = white ? (flip ? set.wl : set.w) : (flip ? set.l : set.r); const img = arr[frame % arr.length];

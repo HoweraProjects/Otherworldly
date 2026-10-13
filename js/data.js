@@ -248,6 +248,14 @@ const WEAPONS = {
            martial:{name:'開山',   desc:'八方裂地衝擊波。'}},
 };
 
+// ===== 頭目 =====
+const MINIBOSS = {
+  enforcer: {name:'重裝執法者 ZERO-7', hint:'鎖定紅線後會高速衝撞，撞完會當機，趁機猛打', hp:900,  r:12, dmg:22, spd:30},
+  hive:     {name:'蜂巢母艦',          hint:'先擊破三顆護盾節點，本體才會受傷',         hp:1100, r:14, dmg:16, spd:40},
+  ghost:    {name:'數據幽靈 GHOST.exe', hint:'會分裂出假身，只有腳下有影子的是本體',     hp:750,  r:9,  dmg:14, spd:16},
+  colossus: {name:'防衛巨像',          hint:'電網封鎖了戰場，躲開地上的砲擊標記',       hp:2200, r:18, dmg:26, spd:13},
+};
+
 const MECH_PARTS = ['V字頭部','裝甲軀幹','肩甲左臂','臂炮右臂','動力腿','核心爐'];
 
 // ===== 敵人 =====
